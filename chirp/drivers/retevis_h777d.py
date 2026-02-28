@@ -78,7 +78,7 @@ TX1 = bytes([0x50, 0xBB, 0xFF, 0x20, 0x12, 0x07, 0x25])  # SC.TX1 in CPS
 
 READ_BLOCK_SIZE = 0x40   # 64 bytes
 WRITE_BLOCK_SIZE = 0x10  # 16 bytes
-DEFAULT_MEMSIZE = 0x1800 # 6144 bytes (very likely for this family)
+DEFAULT_MEMSIZE = 0x1100 # 
 
 VOICE_LIST = ["English", "Chinese"]
 TIMEOUTTIMER_LIST = ["Off", "30 seconds", "60 seconds", "90 seconds",
@@ -171,23 +171,40 @@ def _read_block(radio, addr):
     LOG.debug("READ @%04X cmd=%s", addr, util.hexprint(cmd))
     ser.write(cmd)
 
-    # Some variants send 68, some 69 bytes; read a little extra.
-    resp = ser.read(4 + READ_BLOCK_SIZE + 1)
+    resp = ser.read(4 + READ_BLOCK_SIZE + 2)  # allow 1 extra prefix byte
+
+    LOG.debug("RAW RESP @%04X: %s", addr, util.hexprint(resp[:12]))
+    
     if len(resp) < 4 + READ_BLOCK_SIZE:
         raise errors.RadioError(f"Short read @ {addr:04X}: {len(resp)} bytes")
 
-    if resp[:4] != expected:
-        raise errors.RadioError(
-            f"Bad header @ {addr:04X}: got {resp[:4]!r} expected {expected!r}"
-        )
+    # Some variants prefix the response with 0x06
+    if resp[0:1] == CMD_ACK and len(resp) >= 1 + 4 + READ_BLOCK_SIZE:
+        resp = resp[1:]
+
+    hdr = resp[:4]
+
+    # Length must match
+    if hdr[3] != 0x40:
+        raise errors.RadioError(f"Bad length byte @ {addr:04X}: hdr={hdr!r}")
+
+    # Header type can be 'W' or 'X'
+    if hdr[0] not in (0x57, 0x58):
+        raise errors.RadioError(f"Bad header type @ {addr:04X}: hdr={hdr!r}")
 
     data = resp[4:4 + READ_BLOCK_SIZE]
 
     # ACK after each block
-    ser.write(CMD_ACK)
-    ack = ser.read(1)
-    if ack != CMD_ACK:
-        raise errors.RadioError(f"No ACK after read @ {addr:04X}")
+    
+    try:
+        LOG.debug("About to post-ACK @%04X", addr)
+        ser.write(CMD_ACK)
+        ack = ser.read(1)
+        LOG.debug("Post-ACK read @%04X got: %r", addr, ack)
+        if ack and ack != CMD_ACK:
+            LOG.debug("Unexpected post-read byte @%04X: %r", addr, ack)
+    except Exception:
+        pass
 
     return data
 
@@ -223,6 +240,8 @@ def do_download(radio):
     status.max = radio._memsize
 
     data = bytearray()
+
+    radio.pipe.timeout = 1.0
 
     for addr in range(0, radio._memsize, READ_BLOCK_SIZE):
         status.cur = addr + READ_BLOCK_SIZE
