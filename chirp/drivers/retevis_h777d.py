@@ -296,6 +296,11 @@ class RetevisH777D(chirp_common.CloneModeRadio):
 
         rf.valid_modes = ["NFM", "FM"]
         rf.valid_skips = ["", "S"]
+        # Memory channels are validated against this list even when the
+        # radio does not store a per-channel tuning step. PMR446 channels
+        # are spaced at 12.5 kHz, but the 446.00625 MHz base requires
+        # 6.25 kHz resolution for absolute-frequency validation.
+        rf.valid_tuning_steps = [6.25, 12.5]
         rf.valid_tmodes = ["", "Tone", "TSQL", "DTCS", "Cross"]
         rf.valid_cross_modes = [
             "Tone->Tone",
@@ -455,6 +460,10 @@ class RetevisH777D(chirp_common.CloneModeRadio):
         flags15 = int(_mem.flags15)
 
         mem.mode = "FM" if (flags15 & WIDE_MASK) else "NFM"
+        # The radio does not store a per-channel tuning step, but CHIRP
+        # still validates the hidden field on edit. Use the channel-plan
+        # spacing so existing rows do not retain the default 5.0 kHz value.
+        mem.tuning_step = 12.5
         mem.power = (self.POWER_LEVELS[0]
                      if (flags14 & POWER_LOW_MASK)
                      else self.POWER_LEVELS[1])
