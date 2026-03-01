@@ -40,3 +40,5 @@ chirp/locale/.files
 result/
 # for nvim editor
 .nvim.lua
+
+retevis_h777d-reference/
