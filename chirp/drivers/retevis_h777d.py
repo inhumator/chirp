@@ -119,6 +119,24 @@ def _set_rts_dtr(serial, rts=True, dtr=True):
             pass
 
 
+def _discard_buffers(serial):
+    """Best-effort flush of serial buffers across pyserial variants."""
+    try:
+        serial.reset_output_buffer()
+    except Exception:
+        try:
+            serial.flushOutput()
+        except Exception:
+            pass
+    try:
+        serial.reset_input_buffer()
+    except Exception:
+        try:
+            serial.flushInput()
+        except Exception:
+            pass
+
+
 def _enter_programming_mode(serial):
     """Enter BF480 clone mode: TX1, ident request, then ACK the ident."""
     serial.timeout = 0.6
@@ -211,11 +229,18 @@ def _write_block(radio, addr, size):
 
     cmd = bytes([0x58, hi, lo, size]) + data
     LOG.debug("WRITE @%04X cmd=%s", addr, util.hexprint(cmd[:8]))
+
+    _discard_buffers(ser)
+    time.sleep(0.001)
     ser.write(cmd)
 
+    # The OEM CPS waits before checking for the ACK. Without that pacing,
+    # some radios accept the first write then stop acknowledging subsequent
+    # blocks (commonly failing at 0x0010).
+    time.sleep(0.035 if size > 1 else 0.02)
     ack = ser.read(1)
     if ack != CMD_ACK:
-        raise errors.RadioError(f"No ACK after write @ {addr:04X}")
+        raise errors.RadioError(f"No ACK after write @ {addr:04X}: {ack!r}")
 
 
 def do_download(radio):
@@ -248,6 +273,7 @@ def do_download(radio):
 
 def do_upload(radio):
     _enter_programming_mode(radio.pipe)
+    radio.pipe.timeout = 1.0
 
     status = chirp_common.Status()
     status.msg = "Uploading to radio"
