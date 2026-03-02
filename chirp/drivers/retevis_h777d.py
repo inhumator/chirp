@@ -19,6 +19,7 @@ from chirp import bitwise, chirp_common, directory, errors, memmap, util
 from chirp.settings import (
     RadioSetting,
     RadioSettingGroup,
+    RadioSettings,
     RadioSettingValueBoolean,
     RadioSettingValueList,
 )
@@ -99,6 +100,55 @@ PTTID_MASK = 0x03
 SCAN_ADD_MASK = 0x04
 BCL_MASK = 0x08
 WIDE_MASK = 0x40
+
+SETTINGS_226_BASE = 0x0E20
+SETTINGS_227_BASE = 0x0E30
+SETTINGS_228_BASE = 0x0E40
+
+ADDR_SQUELCH = SETTINGS_226_BASE + 0
+ADDR_SIDEKEY1_SHORT = SETTINGS_226_BASE + 1
+ADDR_SIDEKEY1_LONG = SETTINGS_226_BASE + 2
+ADDR_SAVE = SETTINGS_226_BASE + 3
+ADDR_VOX_LEVEL = SETTINGS_226_BASE + 4
+ADDR_VOX_SWITCH = SETTINGS_226_BASE + 5
+ADDR_ABR = SETTINGS_226_BASE + 6
+ADDR_BEEP = SETTINGS_226_BASE + 8
+ADDR_TOT = SETTINGS_226_BASE + 9
+ADDR_VOICE = SETTINGS_226_BASE + 14
+
+ADDR_SCAN = SETTINGS_227_BASE + 2
+ADDR_SIDEKEY2_SHORT = SETTINGS_227_BASE + 3
+ADDR_SIDEKEY2_LONG = SETTINGS_227_BASE + 4
+ADDR_AUTOLOCK = SETTINGS_227_BASE + 8
+ADDR_LCD_CONTRAST = SETTINGS_227_BASE + 12
+ADDR_WAIT_BACKLIGHT = SETTINGS_227_BASE + 13
+ADDR_RX_BACKLIGHT = SETTINGS_227_BASE + 14
+ADDR_TX_BACKLIGHT = SETTINGS_227_BASE + 15
+
+ADDR_ALARM_MODE = SETTINGS_228_BASE + 0
+ADDR_ROGER = SETTINGS_228_BASE + 7
+
+SQUELCH_LIST = [str(i) for i in range(10)]
+VOX_LEVEL_LIST = [str(i) for i in range(1, 11)]
+# The live OEM UI for H777D exposes OFF and 1s-10s here.
+ABR_LIST = ["Off"] + [f"{i} s" for i in range(1, 11)]
+TOT_LIST = [f"{seconds} s" for seconds in range(15, 181, 15)]
+VOICE_LIST = ["Off", "English"]
+# The OEM UI labels battery saver as OFF/ON for this model.
+SAVE_LIST = ["Off", "On"]
+SCAN_LIST = ["Time", "Carrier", "Search"]
+BACKLIGHT_LIST = ["Off", "Blue", "Orange", "Purple"]
+ALARM_MODE_LIST = ["Site", "Tone", "Code"]
+SIDEKEY_LIST = [
+    "Off",
+    "Monitor",
+    "Scan",
+    "VOX",
+    "Flashlight",
+    "Emergency Alarm",
+    "Channel Lock",
+]
+SIDEKEY_CODES = [0, 1, 2, 3, 5, 11, 12]
 
 
 def _set_rts_dtr(serial, rts=True, dtr=True):
@@ -315,7 +365,7 @@ class RetevisH777D(chirp_common.CloneModeRadio):
 
     def get_features(self):
         rf = chirp_common.RadioFeatures()
-        rf.has_settings = False
+        rf.has_settings = True
         rf.has_name = True
         rf.has_bank = False
         rf.has_tuning_step = False
@@ -380,6 +430,30 @@ class RetevisH777D(chirp_common.CloneModeRadio):
 
     def get_raw_memory(self, number):
         return repr(self._memobj.memory[number - 1])
+
+    def _get_setting_byte(self, addr):
+        value = self.get_mmap()[addr]
+        if isinstance(value, int):
+            return value
+        return value[0]
+
+    def _set_setting_byte(self, addr, value):
+        self.get_mmap()[addr] = int(value) & 0xFF
+
+    def _get_setting_index(self, addr, choices):
+        value = self._get_setting_byte(addr)
+        if value >= len(choices):
+            LOG.warning("Out-of-range setting byte @%04X = 0x%02X", addr, value)
+            return 0
+        return value
+
+    def _get_sidekey_index(self, addr):
+        value = self._get_setting_byte(addr)
+        try:
+            return SIDEKEY_CODES.index(value)
+        except ValueError:
+            LOG.warning("Unknown side key code @%04X = 0x%02X", addr, value)
+            return 0
 
     def _decode_tone(self, memval):
         raw = int.from_bytes(memval.get_raw(), "little")
@@ -533,6 +607,218 @@ class RetevisH777D(chirp_common.CloneModeRadio):
 
         return mem
 
+    def get_settings(self):
+        basic = RadioSettingGroup("basic", "Basic Settings")
+        display = RadioSettingGroup("display", "Display")
+        sidekeys = RadioSettingGroup("sidekeys", "Side Key Functions")
+
+        basic.append(
+            RadioSetting(
+                "squelch",
+                "Squelch",
+                RadioSettingValueList(
+                    SQUELCH_LIST,
+                    current_index=self._get_setting_index(ADDR_SQUELCH,
+                                                          SQUELCH_LIST),
+                ),
+            )
+        )
+        basic.append(
+            RadioSetting(
+                "vox_switch",
+                "VOX Switch",
+                RadioSettingValueBoolean(bool(self._get_setting_byte(
+                    ADDR_VOX_SWITCH))),
+            )
+        )
+        basic.append(
+            RadioSetting(
+                "vox_level",
+                "VOX Level",
+                RadioSettingValueList(
+                    VOX_LEVEL_LIST,
+                    current_index=self._get_setting_index(ADDR_VOX_LEVEL,
+                                                          VOX_LEVEL_LIST),
+                ),
+            )
+        )
+        basic.append(
+            RadioSetting(
+                "voice",
+                "Voice Language",
+                RadioSettingValueList(
+                    VOICE_LIST,
+                    current_index=self._get_setting_index(ADDR_VOICE,
+                                                          VOICE_LIST),
+                ),
+            )
+        )
+        basic.append(
+            RadioSetting(
+                "tot",
+                "Time Out Timer (TOT)",
+                RadioSettingValueList(
+                    TOT_LIST,
+                    current_index=self._get_setting_index(ADDR_TOT, TOT_LIST),
+                ),
+            )
+        )
+        basic.append(
+            RadioSetting(
+                "roger",
+                "Roger",
+                RadioSettingValueBoolean(bool(self._get_setting_byte(
+                    ADDR_ROGER))),
+            )
+        )
+        basic.append(
+            RadioSetting(
+                "beep",
+                "Beep",
+                RadioSettingValueBoolean(bool(self._get_setting_byte(
+                    ADDR_BEEP))),
+            )
+        )
+        basic.append(
+            RadioSetting(
+                "save",
+                "Save Battery",
+                RadioSettingValueList(
+                    SAVE_LIST,
+                    current_index=self._get_setting_index(ADDR_SAVE,
+                                                          SAVE_LIST),
+                ),
+            )
+        )
+        basic.append(
+            RadioSetting(
+                "scan",
+                "Scan",
+                RadioSettingValueList(
+                    SCAN_LIST,
+                    current_index=self._get_setting_index(ADDR_SCAN,
+                                                          SCAN_LIST),
+                ),
+            )
+        )
+        basic.append(
+            RadioSetting(
+                "autolock",
+                "Auto Lock",
+                RadioSettingValueBoolean(bool(self._get_setting_byte(
+                    ADDR_AUTOLOCK))),
+            )
+        )
+        basic.append(
+            RadioSetting(
+                "alarm_mode",
+                "Alarm Mode",
+                RadioSettingValueList(
+                    ALARM_MODE_LIST,
+                    current_index=self._get_setting_index(ADDR_ALARM_MODE,
+                                                          ALARM_MODE_LIST),
+                ),
+            )
+        )
+
+        display.append(
+            RadioSetting(
+                "abr",
+                "Backlight Timeout",
+                RadioSettingValueList(
+                    ABR_LIST,
+                    current_index=self._get_setting_index(ADDR_ABR, ABR_LIST),
+                ),
+            )
+        )
+        display.append(
+            RadioSetting(
+                "lcd_contrast",
+                "LCD Contrast",
+                RadioSettingValueList(
+                    [str(i) for i in range(1, 10)],
+                    current_index=self._get_setting_index(ADDR_LCD_CONTRAST,
+                                                          list(range(9))),
+                ),
+            )
+        )
+        display.append(
+            RadioSetting(
+                "wait_backlight",
+                "Wait Backlight",
+                RadioSettingValueList(
+                    BACKLIGHT_LIST,
+                    current_index=self._get_setting_index(ADDR_WAIT_BACKLIGHT,
+                                                          BACKLIGHT_LIST),
+                ),
+            )
+        )
+        display.append(
+            RadioSetting(
+                "rx_backlight",
+                "RX Backlight",
+                RadioSettingValueList(
+                    BACKLIGHT_LIST,
+                    current_index=self._get_setting_index(ADDR_RX_BACKLIGHT,
+                                                          BACKLIGHT_LIST),
+                ),
+            )
+        )
+        display.append(
+            RadioSetting(
+                "tx_backlight",
+                "TX Backlight",
+                RadioSettingValueList(
+                    BACKLIGHT_LIST,
+                    current_index=self._get_setting_index(ADDR_TX_BACKLIGHT,
+                                                          BACKLIGHT_LIST),
+                ),
+            )
+        )
+
+        sidekeys.append(
+            RadioSetting(
+                "sidekey1_short",
+                "Side Key 1 Short Press",
+                RadioSettingValueList(
+                    SIDEKEY_LIST,
+                    current_index=self._get_sidekey_index(ADDR_SIDEKEY1_SHORT),
+                ),
+            )
+        )
+        sidekeys.append(
+            RadioSetting(
+                "sidekey1_long",
+                "Side Key 1 Long Press",
+                RadioSettingValueList(
+                    SIDEKEY_LIST,
+                    current_index=self._get_sidekey_index(ADDR_SIDEKEY1_LONG),
+                ),
+            )
+        )
+        sidekeys.append(
+            RadioSetting(
+                "sidekey2_short",
+                "Side Key 2 Short Press",
+                RadioSettingValueList(
+                    SIDEKEY_LIST,
+                    current_index=self._get_sidekey_index(ADDR_SIDEKEY2_SHORT),
+                ),
+            )
+        )
+        sidekeys.append(
+            RadioSetting(
+                "sidekey2_long",
+                "Side Key 2 Long Press",
+                RadioSettingValueList(
+                    SIDEKEY_LIST,
+                    current_index=self._get_sidekey_index(ADDR_SIDEKEY2_LONG),
+                ),
+            )
+        )
+
+        return RadioSettings(basic, display, sidekeys)
+
     def set_memory(self, mem):
         _mem = self._memobj.memory[mem.number - 1]
         _name = self._memobj.names[mem.number - 1]
@@ -600,6 +886,78 @@ class RetevisH777D(chirp_common.CloneModeRadio):
                     _mem.flags14 &= ~HOP_OFF_MASK
                 else:
                     _mem.flags14 |= HOP_OFF_MASK
+
+    def set_settings(self, settings):
+        for element in settings:
+            if not isinstance(element, RadioSetting):
+                self.set_settings(element)
+                continue
+
+            name = element.get_name()
+
+            if name == "squelch":
+                self._set_setting_byte(
+                    ADDR_SQUELCH, SQUELCH_LIST.index(str(element.value)))
+            elif name == "vox_switch":
+                self._set_setting_byte(ADDR_VOX_SWITCH, int(element.value))
+            elif name == "vox_level":
+                self._set_setting_byte(
+                    ADDR_VOX_LEVEL, VOX_LEVEL_LIST.index(str(element.value)))
+            elif name == "voice":
+                self._set_setting_byte(
+                    ADDR_VOICE, VOICE_LIST.index(str(element.value)))
+            elif name == "abr":
+                self._set_setting_byte(
+                    ADDR_ABR, ABR_LIST.index(str(element.value)))
+            elif name == "tot":
+                self._set_setting_byte(
+                    ADDR_TOT, TOT_LIST.index(str(element.value)))
+            elif name == "roger":
+                self._set_setting_byte(ADDR_ROGER, int(element.value))
+            elif name == "beep":
+                self._set_setting_byte(ADDR_BEEP, int(element.value))
+            elif name == "save":
+                self._set_setting_byte(
+                    ADDR_SAVE, SAVE_LIST.index(str(element.value)))
+            elif name == "scan":
+                self._set_setting_byte(
+                    ADDR_SCAN, SCAN_LIST.index(str(element.value)))
+            elif name == "autolock":
+                self._set_setting_byte(ADDR_AUTOLOCK, int(element.value))
+            elif name == "alarm_mode":
+                self._set_setting_byte(
+                    ADDR_ALARM_MODE, ALARM_MODE_LIST.index(str(element.value)))
+            elif name == "lcd_contrast":
+                self._set_setting_byte(ADDR_LCD_CONTRAST,
+                                       int(str(element.value)) - 1)
+            elif name == "wait_backlight":
+                self._set_setting_byte(
+                    ADDR_WAIT_BACKLIGHT,
+                    BACKLIGHT_LIST.index(str(element.value)))
+            elif name == "rx_backlight":
+                self._set_setting_byte(
+                    ADDR_RX_BACKLIGHT,
+                    BACKLIGHT_LIST.index(str(element.value)))
+            elif name == "tx_backlight":
+                self._set_setting_byte(
+                    ADDR_TX_BACKLIGHT,
+                    BACKLIGHT_LIST.index(str(element.value)))
+            elif name == "sidekey1_short":
+                self._set_setting_byte(
+                    ADDR_SIDEKEY1_SHORT,
+                    SIDEKEY_CODES[SIDEKEY_LIST.index(str(element.value))])
+            elif name == "sidekey1_long":
+                self._set_setting_byte(
+                    ADDR_SIDEKEY1_LONG,
+                    SIDEKEY_CODES[SIDEKEY_LIST.index(str(element.value))])
+            elif name == "sidekey2_short":
+                self._set_setting_byte(
+                    ADDR_SIDEKEY2_SHORT,
+                    SIDEKEY_CODES[SIDEKEY_LIST.index(str(element.value))])
+            elif name == "sidekey2_long":
+                self._set_setting_byte(
+                    ADDR_SIDEKEY2_LONG,
+                    SIDEKEY_CODES[SIDEKEY_LIST.index(str(element.value))])
 
     @classmethod
     def match_model(cls, filedata, filename):
