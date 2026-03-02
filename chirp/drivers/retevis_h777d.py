@@ -104,6 +104,8 @@ WIDE_MASK = 0x40
 SETTINGS_226_BASE = 0x0E20
 SETTINGS_227_BASE = 0x0E30
 SETTINGS_228_BASE = 0x0E40
+SETTINGS_229_BASE = 0x0E50
+SETTINGS_242_BASE = 0x0F20
 
 ADDR_SQUELCH = SETTINGS_226_BASE + 0
 ADDR_SIDEKEY1_SHORT = SETTINGS_226_BASE + 1
@@ -112,13 +114,18 @@ ADDR_SAVE = SETTINGS_226_BASE + 3
 ADDR_VOX_LEVEL = SETTINGS_226_BASE + 4
 ADDR_VOX_SWITCH = SETTINGS_226_BASE + 5
 ADDR_ABR = SETTINGS_226_BASE + 6
+ADDR_DUAL_WATCH = SETTINGS_226_BASE + 7
 ADDR_BEEP = SETTINGS_226_BASE + 8
 ADDR_TOT = SETTINGS_226_BASE + 9
 ADDR_VOICE = SETTINGS_226_BASE + 14
 
+ADDR_DTMF_SIDE_TONE = SETTINGS_227_BASE + 0
 ADDR_SCAN = SETTINGS_227_BASE + 2
 ADDR_SIDEKEY2_SHORT = SETTINGS_227_BASE + 3
 ADDR_SIDEKEY2_LONG = SETTINGS_227_BASE + 4
+ADDR_A_CHANNEL_DISPLAY = SETTINGS_227_BASE + 5
+ADDR_B_CHANNEL_DISPLAY = SETTINGS_227_BASE + 6
+ADDR_GLOBAL_BCL = SETTINGS_227_BASE + 7
 ADDR_AUTOLOCK = SETTINGS_227_BASE + 8
 ADDR_LCD_CONTRAST = SETTINGS_227_BASE + 12
 ADDR_WAIT_BACKLIGHT = SETTINGS_227_BASE + 13
@@ -126,7 +133,26 @@ ADDR_RX_BACKLIGHT = SETTINGS_227_BASE + 14
 ADDR_TX_BACKLIGHT = SETTINGS_227_BASE + 15
 
 ADDR_ALARM_MODE = SETTINGS_228_BASE + 0
+ADDR_DUAL_WATCH_TX_SELECT = SETTINGS_228_BASE + 2
+ADDR_NOISE_REDUCTION = SETTINGS_228_BASE + 3
+ADDR_REPEATER_TAIL_CLEAR = SETTINGS_228_BASE + 4
+ADDR_REPEATER_TAIL_DETECT = SETTINGS_228_BASE + 5
+ADDR_NOAA_CHANNEL = SETTINGS_228_BASE + 6
 ADDR_ROGER = SETTINGS_228_BASE + 7
+ADDR_RESET_OPERATION = SETTINGS_228_BASE + 8
+ADDR_MENU_FLAGS = SETTINGS_228_BASE + 10
+ADDR_KEYPAD_LOCK = SETTINGS_228_BASE + 13
+
+ADDR_NOAA_SWITCH = SETTINGS_229_BASE + 1
+
+ADDR_SIDEKEY3_SHORT = SETTINGS_242_BASE + 10
+ADDR_SIDEKEY4_SHORT = SETTINGS_242_BASE + 11
+ADDR_SIDEKEY3_LONG = SETTINGS_242_BASE + 14
+ADDR_SIDEKEY4_LONG = SETTINGS_242_BASE + 15
+
+MENU_SETTING_MASK = 0x01
+ALARM_SOUND_MASK = 0x08
+FM_RADIO_ALLOWED_MASK = 0x10
 
 SQUELCH_LIST = [str(i) for i in range(10)]
 VOX_LEVEL_LIST = [str(i) for i in range(1, 11)]
@@ -137,8 +163,18 @@ VOICE_LIST = ["Off", "English"]
 # The OEM UI labels battery saver as OFF/ON for this model.
 SAVE_LIST = ["Off", "On"]
 SCAN_LIST = ["Time", "Carrier", "Search"]
+CHANNEL_DISPLAY_LIST = ["Channel", "Channel + Name", "Channel + Frequency"]
+DTMF_SIDE_TONE_LIST = [
+    "Off (All)",
+    "Keypad DTMF Side Tone",
+    "Send ANI DTMF Side Tone",
+    "Keypad + Send ANI Side Tone",
+]
 BACKLIGHT_LIST = ["Off", "Blue", "Orange", "Purple"]
 ALARM_MODE_LIST = ["Site", "Tone", "Code"]
+DUAL_WATCH_TX_LIST = ["Off", "A Band", "B Band"]
+NOAA_CHANNEL_LIST = [str(i) for i in range(1, 11)]
+REPEATER_TAIL_LIST = ["Off"] + [f"{i * 100} ms" for i in range(1, 11)]
 SIDEKEY_LIST = [
     "Off",
     "Monitor",
@@ -149,6 +185,14 @@ SIDEKEY_LIST = [
     "Channel Lock",
 ]
 SIDEKEY_CODES = [0, 1, 2, 3, 5, 11, 12]
+HIDDEN_SIDEKEY_LIST = [
+    "Off",
+    "Monitor",
+    "Scan",
+    "VOX",
+    "High/Low Power",
+    "Flashlight",
+]
 
 
 def _set_rts_dtr(serial, rts=True, dtr=True):
@@ -447,6 +491,23 @@ class RetevisH777D(chirp_common.CloneModeRadio):
             return 0
         return value
 
+    def _get_optional_setting_index(self, addr, choices):
+        value = self._get_setting_byte(addr)
+        if value >= len(choices):
+            return None
+        return value
+
+    def _get_setting_flag(self, addr, mask):
+        return bool(self._get_setting_byte(addr) & mask)
+
+    def _set_setting_flag(self, addr, mask, enabled):
+        value = self._get_setting_byte(addr)
+        if enabled:
+            value |= mask
+        else:
+            value &= ~mask
+        self._set_setting_byte(addr, value)
+
     def _get_sidekey_index(self, addr):
         value = self._get_setting_byte(addr)
         try:
@@ -611,6 +672,7 @@ class RetevisH777D(chirp_common.CloneModeRadio):
         basic = RadioSettingGroup("basic", "Basic Settings")
         display = RadioSettingGroup("display", "Display")
         sidekeys = RadioSettingGroup("sidekeys", "Side Key Functions")
+        hidden = RadioSettingGroup("hidden", "Hidden OEM Settings")
 
         basic.append(
             RadioSetting(
@@ -817,7 +879,213 @@ class RetevisH777D(chirp_common.CloneModeRadio):
             )
         )
 
-        return RadioSettings(basic, display, sidekeys)
+        hidden.append(
+            RadioSetting(
+                "menu_setting",
+                "Menu Setting",
+                RadioSettingValueBoolean(
+                    self._get_setting_flag(ADDR_MENU_FLAGS, MENU_SETTING_MASK)),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "reset_operation",
+                "Reset Operation",
+                RadioSettingValueBoolean(bool(self._get_setting_byte(
+                    ADDR_RESET_OPERATION))),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "a_channel_display",
+                "A Channel Display Mode",
+                RadioSettingValueList(
+                    CHANNEL_DISPLAY_LIST,
+                    current_index=self._get_setting_index(
+                        ADDR_A_CHANNEL_DISPLAY, CHANNEL_DISPLAY_LIST),
+                ),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "b_channel_display",
+                "B Channel Display Mode",
+                RadioSettingValueList(
+                    CHANNEL_DISPLAY_LIST,
+                    current_index=self._get_setting_index(
+                        ADDR_B_CHANNEL_DISPLAY, CHANNEL_DISPLAY_LIST),
+                ),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "dtmf_side_tone",
+                "DTMF Side Tone",
+                RadioSettingValueList(
+                    DTMF_SIDE_TONE_LIST,
+                    current_index=self._get_setting_index(
+                        ADDR_DTMF_SIDE_TONE, DTMF_SIDE_TONE_LIST),
+                ),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "global_bcl",
+                "Busy Channel Lockout (Global)",
+                RadioSettingValueBoolean(bool(self._get_setting_byte(
+                    ADDR_GLOBAL_BCL))),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "keypad_lock",
+                "Keypad Lock",
+                RadioSettingValueBoolean(bool(self._get_setting_byte(
+                    ADDR_KEYPAD_LOCK))),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "noise_reduction",
+                "Noise Reduction",
+                RadioSettingValueBoolean(bool(self._get_setting_byte(
+                    ADDR_NOISE_REDUCTION))),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "fm_radio_allowed",
+                "FM Radio Allowed",
+                RadioSettingValueBoolean(
+                    self._get_setting_flag(ADDR_MENU_FLAGS,
+                                           FM_RADIO_ALLOWED_MASK)),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "alarm_sound",
+                "Alarm Sound",
+                RadioSettingValueBoolean(
+                    self._get_setting_flag(ADDR_MENU_FLAGS, ALARM_SOUND_MASK)),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "dual_watch",
+                "Dual Watch",
+                RadioSettingValueBoolean(bool(self._get_setting_byte(
+                    ADDR_DUAL_WATCH))),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "dual_watch_tx_select",
+                "Dual Watch TX Select",
+                RadioSettingValueList(
+                    DUAL_WATCH_TX_LIST,
+                    current_index=self._get_setting_index(
+                        ADDR_DUAL_WATCH_TX_SELECT, DUAL_WATCH_TX_LIST),
+                ),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "noaa_channel",
+                "NOAA Channel",
+                RadioSettingValueList(
+                    NOAA_CHANNEL_LIST,
+                    current_index=self._get_setting_index(
+                        ADDR_NOAA_CHANNEL, NOAA_CHANNEL_LIST),
+                ),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "noaa_switch",
+                "NOAA Switch",
+                RadioSettingValueBoolean(bool(self._get_setting_byte(
+                    ADDR_NOAA_SWITCH))),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "repeater_tail_clear",
+                "Repeater Tail Clear",
+                RadioSettingValueList(
+                    REPEATER_TAIL_LIST,
+                    current_index=self._get_setting_index(
+                        ADDR_REPEATER_TAIL_CLEAR, REPEATER_TAIL_LIST),
+                ),
+            )
+        )
+        hidden.append(
+            RadioSetting(
+                "repeater_tail_detect",
+                "Repeater Tail Detect",
+                RadioSettingValueList(
+                    REPEATER_TAIL_LIST,
+                    current_index=self._get_setting_index(
+                        ADDR_REPEATER_TAIL_DETECT, REPEATER_TAIL_LIST),
+                ),
+            )
+        )
+        sidekey3_short_idx = self._get_optional_setting_index(
+            ADDR_SIDEKEY3_SHORT, HIDDEN_SIDEKEY_LIST)
+        if sidekey3_short_idx is not None:
+            hidden.append(
+                RadioSetting(
+                    "sidekey3_short",
+                    "Side Key 3 Short Press",
+                    RadioSettingValueList(
+                        HIDDEN_SIDEKEY_LIST,
+                        current_index=sidekey3_short_idx,
+                    ),
+                )
+            )
+
+        sidekey4_short_idx = self._get_optional_setting_index(
+            ADDR_SIDEKEY4_SHORT, HIDDEN_SIDEKEY_LIST)
+        if sidekey4_short_idx is not None:
+            hidden.append(
+                RadioSetting(
+                    "sidekey4_short",
+                    "Side Key 4 Short Press",
+                    RadioSettingValueList(
+                        HIDDEN_SIDEKEY_LIST,
+                        current_index=sidekey4_short_idx,
+                    ),
+                )
+            )
+
+        sidekey3_long_idx = self._get_optional_setting_index(
+            ADDR_SIDEKEY3_LONG, HIDDEN_SIDEKEY_LIST)
+        if sidekey3_long_idx is not None:
+            hidden.append(
+                RadioSetting(
+                    "sidekey3_long",
+                    "Side Key 3 Long Press",
+                    RadioSettingValueList(
+                        HIDDEN_SIDEKEY_LIST,
+                        current_index=sidekey3_long_idx,
+                    ),
+                )
+            )
+
+        sidekey4_long_idx = self._get_optional_setting_index(
+            ADDR_SIDEKEY4_LONG, HIDDEN_SIDEKEY_LIST)
+        if sidekey4_long_idx is not None:
+            hidden.append(
+                RadioSetting(
+                    "sidekey4_long",
+                    "Side Key 4 Long Press",
+                    RadioSettingValueList(
+                        HIDDEN_SIDEKEY_LIST,
+                        current_index=sidekey4_long_idx,
+                    ),
+                )
+            )
+
+        return RadioSettings(basic, display, sidekeys, hidden)
 
     def set_memory(self, mem):
         _mem = self._memobj.memory[mem.number - 1]
@@ -958,6 +1226,71 @@ class RetevisH777D(chirp_common.CloneModeRadio):
                 self._set_setting_byte(
                     ADDR_SIDEKEY2_LONG,
                     SIDEKEY_CODES[SIDEKEY_LIST.index(str(element.value))])
+            elif name == "menu_setting":
+                self._set_setting_flag(ADDR_MENU_FLAGS, MENU_SETTING_MASK,
+                                       bool(element.value))
+            elif name == "reset_operation":
+                self._set_setting_byte(ADDR_RESET_OPERATION, int(element.value))
+            elif name == "a_channel_display":
+                self._set_setting_byte(
+                    ADDR_A_CHANNEL_DISPLAY,
+                    CHANNEL_DISPLAY_LIST.index(str(element.value)))
+            elif name == "b_channel_display":
+                self._set_setting_byte(
+                    ADDR_B_CHANNEL_DISPLAY,
+                    CHANNEL_DISPLAY_LIST.index(str(element.value)))
+            elif name == "dtmf_side_tone":
+                self._set_setting_byte(
+                    ADDR_DTMF_SIDE_TONE,
+                    DTMF_SIDE_TONE_LIST.index(str(element.value)))
+            elif name == "global_bcl":
+                self._set_setting_byte(ADDR_GLOBAL_BCL, int(element.value))
+            elif name == "keypad_lock":
+                self._set_setting_byte(ADDR_KEYPAD_LOCK, int(element.value))
+            elif name == "noise_reduction":
+                self._set_setting_byte(ADDR_NOISE_REDUCTION, int(element.value))
+            elif name == "fm_radio_allowed":
+                self._set_setting_flag(ADDR_MENU_FLAGS, FM_RADIO_ALLOWED_MASK,
+                                       bool(element.value))
+            elif name == "alarm_sound":
+                self._set_setting_flag(ADDR_MENU_FLAGS, ALARM_SOUND_MASK,
+                                       bool(element.value))
+            elif name == "dual_watch":
+                self._set_setting_byte(ADDR_DUAL_WATCH, int(element.value))
+            elif name == "dual_watch_tx_select":
+                self._set_setting_byte(
+                    ADDR_DUAL_WATCH_TX_SELECT,
+                    DUAL_WATCH_TX_LIST.index(str(element.value)))
+            elif name == "noaa_channel":
+                self._set_setting_byte(
+                    ADDR_NOAA_CHANNEL,
+                    NOAA_CHANNEL_LIST.index(str(element.value)))
+            elif name == "noaa_switch":
+                self._set_setting_byte(ADDR_NOAA_SWITCH, int(element.value))
+            elif name == "repeater_tail_clear":
+                self._set_setting_byte(
+                    ADDR_REPEATER_TAIL_CLEAR,
+                    REPEATER_TAIL_LIST.index(str(element.value)))
+            elif name == "repeater_tail_detect":
+                self._set_setting_byte(
+                    ADDR_REPEATER_TAIL_DETECT,
+                    REPEATER_TAIL_LIST.index(str(element.value)))
+            elif name == "sidekey3_short":
+                self._set_setting_byte(
+                    ADDR_SIDEKEY3_SHORT,
+                    HIDDEN_SIDEKEY_LIST.index(str(element.value)))
+            elif name == "sidekey4_short":
+                self._set_setting_byte(
+                    ADDR_SIDEKEY4_SHORT,
+                    HIDDEN_SIDEKEY_LIST.index(str(element.value)))
+            elif name == "sidekey3_long":
+                self._set_setting_byte(
+                    ADDR_SIDEKEY3_LONG,
+                    HIDDEN_SIDEKEY_LIST.index(str(element.value)))
+            elif name == "sidekey4_long":
+                self._set_setting_byte(
+                    ADDR_SIDEKEY4_LONG,
+                    HIDDEN_SIDEKEY_LIST.index(str(element.value)))
 
     @classmethod
     def match_model(cls, filedata, filename):
